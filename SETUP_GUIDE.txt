@@ -1,0 +1,147 @@
+================================================================
+   PINN EMI PREDICTOR — TEAM NEXUS
+   Setup Guide for Teammates
+================================================================
+
+
+PREREQUISITES
+-------------
+Make sure these are installed before starting:
+
+  - Python 3.10 or higher  →  python.org
+  - Git                    →  git-scm.com
+
+Check by running:
+  python --version
+  git --version
+
+Both should print a version number.
+
+
+----------------------------------------------------------------
+STEP 1 — Clone the repository
+----------------------------------------------------------------
+  git clone https://github.com/YOUR_USERNAME/pinn-emi-predictor.git
+
+Replace YOUR_USERNAME with the actual GitHub username.
+
+
+----------------------------------------------------------------
+STEP 2 — Go into the project folder
+----------------------------------------------------------------
+  cd pinn-emi-predictor
+
+
+----------------------------------------------------------------
+STEP 3 — Create a virtual environment
+----------------------------------------------------------------
+  python -m venv venv
+
+
+----------------------------------------------------------------
+STEP 4 — Activate the virtual environment
+----------------------------------------------------------------
+  Windows:
+    venv\Scripts\activate
+
+  Mac/Linux:
+    source venv/bin/activate
+
+  You should see (venv) appear at the start of your terminal.
+  This means it is working.
+
+
+----------------------------------------------------------------
+STEP 5 — Install all dependencies
+----------------------------------------------------------------
+  pip install -r requirements.txt
+
+  Takes 2-5 minutes. Installs PyTorch, NumPy, Gradio, Matplotlib.
+
+
+----------------------------------------------------------------
+STEP 6 — Generate training data
+----------------------------------------------------------------
+  python data/generate_data.py
+
+  Takes about 5 seconds. Creates 3 files in the data/ folder:
+    - X_labeled.npy          (200 labeled samples)
+    - collocation_pts.npy    (40,000 physics points)
+    - boundary_pts.npy       (5,000 boundary points)
+
+
+----------------------------------------------------------------
+STEP 7 — Train the model
+----------------------------------------------------------------
+  python model/train.py
+
+  WARNING: Takes 10-20 minutes on CPU.
+  You will see progress like:
+
+    Epoch      1  total=...  data=...  phys=...  bnd=...
+    Epoch    500  total=...  data=...  phys=...  bnd=...
+    ...
+    Epoch   3000  total=...
+
+  When finished it saves:  model/pinn_checkpoint.pt
+
+
+----------------------------------------------------------------
+STEP 8 — Launch the demo
+----------------------------------------------------------------
+  python demo/app.py
+
+  Then open your browser and go to:
+    http://localhost:7860
+
+  You will see the interactive EMI heatmap interface.
+
+
+----------------------------------------------------------------
+OR — Run everything in one command (Steps 6 + 7 + 8)
+----------------------------------------------------------------
+  python run_all.py
+
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+"python not found"
+  → Try python3 instead of python (Mac/Linux)
+
+"pip install fails"
+  → Make sure venv is activated. You must see (venv) in terminal.
+
+"Port 7860 already in use"
+  → Change port in demo/app.py:
+      demo.launch(server_port=7861)
+
+"ModuleNotFoundError"
+  → You forgot to activate venv. Run:
+      Windows:   venv\Scripts\activate
+      Mac/Linux: source venv/bin/activate
+
+"phys loss is in the millions at Epoch 1"
+  → You have an old version of physics_loss.py.
+    Re-clone the repo fresh and start again.
+
+
+================================================================
+PROJECT STRUCTURE
+================================================================
+
+pinn-emi-predictor/
+├── data/
+│   └── generate_data.py      ← run this first
+├── model/
+│   ├── pinn_model.py         ← network architecture
+│   ├── physics_loss.py       ← Helmholtz + boundary loss
+│   └── train.py              ← training loop
+├── inference/
+│   └── predict.py            ← heatmap generation
+├── demo/
+│   └── app.py                ← Gradio web interface
+├── run_all.py                ← runs everything at once
+└── requirements.txt
+
