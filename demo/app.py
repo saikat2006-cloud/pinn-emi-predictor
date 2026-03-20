@@ -10,6 +10,8 @@ Opens a browser at http://localhost:7860
 """
 
 import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import sys
 import numpy as np
 import torch
