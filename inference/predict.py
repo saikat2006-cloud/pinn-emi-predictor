@@ -71,13 +71,13 @@ def predict_heatmap(model: torch.nn.Module,
         np.full(n * n, freq_hz),
     ], axis=1).astype(np.float32)
 
-    from model.physics_loss import normalize
+    from model.physics_loss import normalize, denormalize_y
     t      = torch.tensor(pts, dtype=torch.float32).to(device)
     t_norm = normalize(t)
 
     t0 = time.perf_counter()
     with torch.no_grad():
-        E = model(t_norm).cpu().numpy()
+        E = denormalize_y(model(t_norm)).cpu().numpy()
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     heatmap = E.reshape(n, n)

@@ -10,79 +10,65 @@ Outputs:
     model/pinn_checkpoint.pt   – trained weights
     model/loss_curves.png      – training loss plot
 """
-
-import os
-import sys
+import os, sys
 import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-# Allow imports from project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.pinn_model import PINN
 from model.physics_loss import total_loss
 
-# ── Config ─────────────────────────────────────────────────────────────────
-EPOCHS        = 3_000    # CPU: 3k epochs is enough, model converges well
-LR            = 1e-3
-BATCH_SIZE    = 200      # use all labeled data each step (only 200 samples)
-COLL_BATCH    = 500      # CPU: small collocation batch — autograd is expensive
-BND_BATCH     = 100      # CPU: small boundary batch
-W_DATA        = 1.0
-W_PHYS        = 0.1      # safe now — inputs are normalized
-W_BND         = 0.5
-LOG_EVERY     = 500
-SAVE_DIR      = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR      = os.path.join(os.path.dirname(SAVE_DIR), "data")
+EPOCHS_WARMUP  = 5_000
+EPOCHS_PHYSICS = 0
+EPOCHS_TOTAL   = EPOCHS_WARMUP + EPOCHS_PHYSICS
 
-# ── Device ─────────────────────────────────────────────────────────────────
+LR          = 1e-3
+COLL_BATCH  = 500
+BND_BATCH   = 100
+
+W_DATA_1, W_PHYS_1, W_BND_1 = 1.0, 0.0, 0.0
+W_DATA_2, W_PHYS_2, W_BND_2 = 1.0, 0.0, 0.0
+
+LOG_EVERY = 500
+SAVE_DIR  = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR  = os.path.join(os.path.dirname(SAVE_DIR), "data")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print(f"Device: {device}")
 
-# ── Load data ──────────────────────────────────────────────────────────────
-X_labeled  = torch.tensor(np.load(os.path.join(DATA_DIR, "X_labeled.npy")),
-                           dtype=torch.float32).to(device)
-y_labeled  = torch.tensor(np.load(os.path.join(DATA_DIR, "y_labeled.npy")),
-                           dtype=torch.float32).to(device)
-coll_all   = torch.tensor(np.load(os.path.join(DATA_DIR, "collocation_pts.npy")),
-                           dtype=torch.float32).to(device)
-bnd_all    = torch.tensor(np.load(os.path.join(DATA_DIR, "boundary_pts.npy")),
-                           dtype=torch.float32).to(device)
+X_lab = torch.tensor(np.load(os.path.join(DATA_DIR, "X_labeled.npy")),       dtype=torch.float32).to(device)
+y_lab = torch.tensor(np.load(os.path.join(DATA_DIR, "y_labeled.npy")),       dtype=torch.float32).to(device)
+coll  = torch.tensor(np.load(os.path.join(DATA_DIR, "collocation_pts.npy")), dtype=torch.float32).to(device)
+bnd   = torch.tensor(np.load(os.path.join(DATA_DIR, "boundary_pts.npy")),    dtype=torch.float32).to(device)
 
-print(f"Labeled  : {X_labeled.shape}  y: {y_labeled.shape}")
-print(f"Coll pts : {coll_all.shape}")
-print(f"Bnd pts  : {bnd_all.shape}")
+print(f"y labels — min:{y_lab.min():.5f}  max:{y_lab.max():.5f}  mean:{y_lab.mean():.5f}")
 
-# ── Model, optimiser, scheduler ────────────────────────────────────────────
 model = PINN().to(device)
 opt   = torch.optim.Adam(model.parameters(), lr=LR)
-sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS)
+sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS_TOTAL, eta_min=1e-5)
+print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Trainable parameters: {n_params:,}")
+history = {"total":[], "data":[], "phys":[], "bnd":[]}
 
-# ── Training ───────────────────────────────────────────────────────────────
-history = {"total": [], "data": [], "phys": [], "bnd": []}
+print(f"\nPhase 1 — warmup data only  : {EPOCHS_WARMUP} epochs")
+print(f"Phase 2 — data + physics    : {EPOCHS_PHYSICS} epochs\n")
 
-print("\nStarting training...")
-for epoch in range(1, EPOCHS + 1):
+for epoch in range(1, EPOCHS_TOTAL + 1):
+    if epoch <= EPOCHS_WARMUP:
+        wd, wp, wb = W_DATA_1, W_PHYS_1, W_BND_1
+    else:
+        wd, wp, wb = W_DATA_2, W_PHYS_2, W_BND_2
 
-    # Subsample collocation and boundary each epoch
-    coll_idx = torch.randperm(len(coll_all), device=device)[:COLL_BATCH]
-    bnd_idx  = torch.randperm(len(bnd_all),  device=device)[:BND_BATCH]
-    coll_batch = coll_all[coll_idx]
-    bnd_batch  = bnd_all[bnd_idx]
+    ci = torch.randperm(len(coll), device=device)[:COLL_BATCH]
+    bi = torch.randperm(len(bnd),  device=device)[:BND_BATCH]
 
     opt.zero_grad()
-
     L_total, L_data, L_phys, L_bnd = total_loss(
-        model,
-        X_labeled, y_labeled,
-        coll_batch, bnd_batch,
-        w_data=W_DATA, w_phys=W_PHYS, w_bnd=W_BND,
+        model, X_lab, y_lab, coll[ci], bnd[bi],
+        w_data=wd, w_phys=wp, w_bnd=wb,
     )
-
     L_total.backward()
     nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     opt.step()
@@ -94,41 +80,26 @@ for epoch in range(1, EPOCHS + 1):
     history["bnd"].append(L_bnd.item())
 
     if epoch % LOG_EVERY == 0 or epoch == 1:
-        lr_now = sched.get_last_lr()[0]
+        phase = "WARMUP " if epoch <= EPOCHS_WARMUP else "PHYSICS"
         print(
-            f"Epoch {epoch:>6}  "
-            f"total={L_total.item():.4e}  "
-            f"data={L_data.item():.4e}  "
-            f"phys={L_phys.item():.4e}  "
-            f"bnd={L_bnd.item():.4e}  "
-            f"lr={lr_now:.2e}"
+            f"[{phase}] Epoch {epoch:>5} | "
+            f"total={L_total.item():.4e} | "
+            f"data={L_data.item():.4e} | "
+            f"phys={L_phys.item():.4e} | "
+            f"bnd={L_bnd.item():.4e}"
         )
 
-# ── Save checkpoint ────────────────────────────────────────────────────────
-ckpt_path = os.path.join(SAVE_DIR, "pinn_checkpoint.pt")
-torch.save({
-    "model_state":  model.state_dict(),
-    "epoch":        EPOCHS,
-    "final_loss":   history["total"][-1],
-    "history":      history,
-}, ckpt_path)
-print(f"\nCheckpoint saved: {ckpt_path}")
+ckpt = os.path.join(SAVE_DIR, "pinn_checkpoint.pt")
+torch.save({"model_state": model.state_dict(), "epoch": EPOCHS_TOTAL, "history": history}, ckpt)
+print(f"\nCheckpoint saved: {ckpt}")
 
-# ── Plot loss curves ───────────────────────────────────────────────────────
-fig, ax = plt.subplots(figsize=(9, 4))
-epochs_x = range(1, EPOCHS + 1)
-ax.semilogy(epochs_x, history["total"], label="Total",    linewidth=1.5)
-ax.semilogy(epochs_x, history["data"],  label="L_data",   linewidth=1,  linestyle="--")
-ax.semilogy(epochs_x, history["phys"],  label="L_physics", linewidth=1,  linestyle="--")
-ax.semilogy(epochs_x, history["bnd"],   label="L_boundary", linewidth=1, linestyle="--")
-ax.set_xlabel("Epoch")
-ax.set_ylabel("Loss (log scale)")
-ax.set_title("PINN Training Loss Curves")
-ax.legend()
-ax.grid(True, alpha=0.3)
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.semilogy(history["data"],  label="L_data")
+ax.semilogy(history["phys"],  label="L_physics", linestyle="--")
+ax.semilogy(history["bnd"],   label="L_boundary", linestyle="--")
+ax.axvline(EPOCHS_WARMUP, color="gray", linestyle=":", label="physics ON")
+ax.set_xlabel("Epoch"); ax.set_ylabel("Loss"); ax.legend(); ax.grid(True, alpha=0.3)
 plt.tight_layout()
-plot_path = os.path.join(SAVE_DIR, "loss_curves.png")
-plt.savefig(plot_path, dpi=150)
-print(f"Loss plot saved:  {plot_path}")
+plt.savefig(os.path.join(SAVE_DIR, "loss_curves.png"), dpi=150)
 plt.close()
-print("\nTraining complete.")
+print("Loss plot saved.\nDone.")
